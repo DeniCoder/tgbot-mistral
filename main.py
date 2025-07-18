@@ -1,5 +1,3 @@
-# main.py
-# --- Импорт необходимых библиотек ---
 import os
 import asyncio
 from aiogram import Bot, Dispatcher, types
@@ -110,6 +108,12 @@ async def handle_prompt(message: types.Message):
             f.write(file_bytes)
 
     except Exception as e:
+        if "rate limit reached" in str(e):
+            await message.answer(
+                f"Лимит генерации изображений исчерпан, попробуйте еще раз через несколько минут.\n"
+                f"Но вот сгенерированный пост: {generated_text}"
+            )
+            return
         await message.answer(f"Ошибка при генерации изображения: {e}")
         return
 
