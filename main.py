@@ -1,125 +1,135 @@
-# Импорт необходимых библиотек
-import os  # Для работы с окружением и .env
-import asyncio  # Для асинхронного кода (aiogram асинхронный)
-from dotenv import load_dotenv  # Для загрузки переменных из .env
-from aiogram import Bot, Dispatcher  # Основные компоненты aiogram
-from aiogram.filters import CommandStart, Command  # Фильтры для команд
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton  # Для сообщений и клавиатуры
-from mistralai import Mistral  # Клиент для Mistral API (из документации https://docs.mistral.ai/)
+# main.py
+# --- Импорт необходимых библиотек ---
+import os
+import asyncio
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import CommandStart
+from aiogram.types import FSInputFile
+from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram import F
+from dotenv import load_dotenv
 
-# Загружаем переменные из .env
+# Импорт клиента Mistral
+from mistralai import Mistral
+
+# Загрузка переменных окружения из .env
 load_dotenv()
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')  # Токен Telegram-бота
-MISTRAL_API_KEY = os.getenv('MISTRAL_API_KEY')  # Ключ Mistral API
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 
-# Инициализация бота и диспетчера
+# Константы моделей Mistral (обновлённые идентификаторы)
+TEXT_MODEL = "ministral-8b-2410"         # Точная модель для генерации текста
+IMAGE_MODEL = "mistral-medium-2505"      # Модель для генерации изображений
+
+# --- Инициализация Telegram бота и диспетчера ---
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# Создаём меню управления (ReplyKeyboardMarkup)
-main_menu = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="Генерировать пост")],  # Кнопка для запуска генерации
-        [KeyboardButton(text="Помощь")]  # Кнопка для помощи
-    ],
-    resize_keyboard=True,  # Автоматический размер
-    one_time_keyboard=False  # Клавиатура не скрывается после нажатия
-)
+# --- Инициализация клиента Mistral ---
+client = Mistral(api_key=MISTRAL_API_KEY)
 
-
-# Хэндлер для команды /start (приветственное сообщение)
+# --- Обработчик команды /start ---
 @dp.message(CommandStart())
-async def send_welcome(message: Message):
-    # Приветственное сообщение с описанием
-    welcome_text = (
-        "Привет! Я бот для генерации постов с текстом и изображением через Mistral AI.\n"
-        "Возможности:\n"
-        "- Отправь мне промпт (текст), и я сгенерирую пост с текстом и картинкой.\n"
-        "- Используй меню для управления.\n"
-        "Нажми 'Генерировать пост' или просто напиши промпт."
+async def start_handler(message: types.Message):
+    kb = ReplyKeyboardBuilder().add(types.KeyboardButton(text="🚀 Сгенерировать пост"))
+    await message.answer(
+        "Привет! Я могу сгенерировать пост и картинку по вашему описанию. Просто отправьте свой промпт в виде текста.",
+        reply_markup=kb.as_markup(resize_keyboard=True)
     )
-    await message.answer(welcome_text, reply_markup=main_menu)  # Отправляем с меню
 
+# --- Обработчик пользовательского промпта ---
+@dp.message(F.text)
+async def handle_prompt(message: types.Message):
+    user_prompt = message.text.strip()
+    await message.answer("⏳ Генерирую пост и изображение, пожалуйста, подождите...")
 
-# Хэндлер для команды /help или кнопки "Помощь"
-@dp.message(Command('help'))
-@dp.message(lambda message: message.text == "Помощь")
-async def send_help(message: Message):
-    help_text = "Инструкция:\n- Напиши промпт, например: 'Пост о закате на море'.\n- Я отправлю его в Mistral API и верну текст + изображение."
-    await message.answer(help_text, reply_markup=main_menu)
-
-
-# Хэндлер для кнопки "Генерировать пост" (просит ввести промпт)
-@dp.message(lambda message: message.text == "Генерировать пост")
-async def ask_for_prompt(message: Message):
-    await message.answer("Введите промпт для генерации поста:", reply_markup=main_menu)
-
-
-# Хэндлер для любого текстового сообщения (считаем его промптом)
-@dp.message()
-async def generate_post(message: Message):
-    prompt = message.text  # Получаем текст от пользователя как промпт
-
-    # Инициализируем клиент Mistral (из документации https://docs.mistral.ai/getting-started/quickstart/)
-    client = Mistral(api_key=MISTRAL_API_KEY)
-
+    # --- Генерация текста через Mistral ---
     try:
-        # Отправляем запрос в Mistral API для генерации текста и изображения
-        # Используем chat.complete с моделью (например, mistral-large-latest)
-        # Для изображений: предполагаем использование агента с tool 'image_generation' (см. docs.mistral.ai/agents/connectors/image_generation/)
-        # В реальности настрой агент в консоли и укажи его ID. Здесь пример с базовым chat.
         chat_response = client.chat.complete(
-            model="mistral-large-latest",  # Модель из docs
+            model=TEXT_MODEL,
             messages=[
-                {"role": "user",
-                 "content": f"Сгенерируй пост: {prompt}. Включи текст и сгенерируй изображение через tool."}
+                {"role": "system", "content": "Напиши короткий творческий пост по следующей теме."},
+                {"role": "user", "content": user_prompt}
             ],
-            # Для агентов с изображениями: добавьте tools (пример из docs)
-            tools=[{  # Пример инструмента для image generation (адаптировано из docs[13])
-                "type": "function",
-                "function": {
-                    "name": "generate_image",
-                    "description": "Generate an image based on prompt",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"prompt": {"type": "string"}},
-                        "required": ["prompt"]
-                    }
-                }
-            }],
-            tool_choice="auto"  # Автоматический выбор инструмента
+            max_tokens=180,
+            temperature=0.8
+        )
+        generated_text = chat_response.choices[0].message.content
+    except Exception as e:
+        await message.answer(f"Ошибка при генерации текста: {e}")
+        return
+
+    # --- Генерация изображения через Mistral ---
+    try:
+        # Создаём агент с инструментом image_generation
+        image_agent = client.beta.agents.create(
+            model=IMAGE_MODEL,
+            name="Image Generation Agent",
+            description="Генерация изображений к постам.",
+            instructions="Используй инструмент генерации картинок.",
+            tools=[{"type": "image_generation"}],
+            completion_args={
+                "temperature": 0.3,
+                "top_p": 0.95
+            }
         )
 
-        # Получаем текст из ответа (первый choice)
-        generated_text = chat_response.choices[0].message.content
+        img_response = client.beta.conversations.start(
+            agent_id=image_agent.id,
+            inputs=user_prompt
+        )
 
-        # Для изображения: в ответе от агента может быть вызов инструмента с URL изображения
-        # Здесь упрощённо: предполагаем, что в ответе есть URL изображения (в реальности парсите tool_calls)
-        # Если tool вызван, Mistral вернёт tool_calls с результатом (URL изображения)
-        image_url = None
-        if chat_response.choices[0].message.tool_calls:
-            # Пример парсинга (в реальности обработайте вызов инструмента)
-            tool_call = chat_response.choices[0].message.tool_calls[0]
-            if tool_call.function.name == "generate_image":
-                # Здесь должно быть выполнение инструмента, но Mistral обрабатывает встроенные connectors
-                # Для примера: предположим, URL возвращается в аргументах или последующем вызове
-                image_url = "https://example.com/generated_image.jpg"  # Замените на реальный парсинг
+        # Обработка outputs, чтобы найти нужные части ответа
+        # Обычно второй элемент outputs - MessageOutputEntry
+        outputs = img_response.outputs
+        msg_entry = None
+        for entry in outputs:
+            if getattr(entry, 'type', None) == 'message.output':
+                msg_entry = entry
+                break
+        if not msg_entry:
+            await message.answer("Ошибка: не найден message.output в ответе модели.")
+            return
 
-        # Отправляем ответ пользователю в одном сообщении
-        if image_url:
-            await message.answer_photo(photo=image_url, caption=generated_text)  # Изображение с текстом
-        else:
-            await message.answer(generated_text + "\n(Изображение не сгенерировано, проверьте настройку агента.)")
+        file_id = None
+        text_part = None
+        for part in getattr(msg_entry, 'content', []):
+            if getattr(part, 'type', None) == 'text':
+                text_part = getattr(part, 'text', None)
+            elif getattr(part, 'type', None) == 'tool_file':
+                file_id = getattr(part, 'file_id', None)
+
+        if not file_id:
+            await message.answer("Ошибка: не найден файл изображения в ответе модели.")
+            return
+
+        # Скачиваем изображение
+        file_bytes = client.files.download(file_id=file_id).read()
+        image_path = "image_generated.png"
+        with open(image_path, "wb") as f:
+            f.write(file_bytes)
 
     except Exception as e:
-        await message.answer(f"Ошибка: {str(e)}. Проверьте API ключ и документацию Mistral.")
+        await message.answer(f"Ошибка при генерации изображения: {e}")
+        return
 
+    try:
+        # Отправка единым сообщением картинки и сгенерированного текста
+        input_file = FSInputFile(image_path)
+        # Используем текст именно как подпись к картинке
+        caption_str = (generated_text or "Пост готов!").strip()
+        await message.answer_photo(
+            input_file,
+            caption=caption_str
+        )
+    except Exception as e:
+        await message.answer(f"Ошибка при отправке изображения: {e}")
+    finally:
+        # Удаление файла картинки после отправки
+        if os.path.exists(image_path):
+            os.remove(image_path)
 
-# Основная функция для запуска бота
-async def main():
-    await dp.start_polling(bot)  # Запускаем polling (опрос обновлений)
-
-
-# Запуск
-if __name__ == '__main__':
-    asyncio.run(main())
+# --- Основная точка входа ---
+if __name__ == "__main__":
+    # Запуск бота (асинхронно)
+    asyncio.run(dp.start_polling(bot))
